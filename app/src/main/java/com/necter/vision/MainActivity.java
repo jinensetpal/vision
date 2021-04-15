@@ -4,8 +4,10 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.util.Log;
 import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
@@ -17,9 +19,11 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.util.Pair;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.necter.vision.ml.Deeplab;
+import com.necter.vision.ml.Deeplabv3257MvGpu;
 
 import org.tensorflow.lite.DataType;
 import org.tensorflow.lite.support.image.ImageProcessor;
@@ -27,16 +31,24 @@ import org.tensorflow.lite.support.image.TensorImage;
 import org.tensorflow.lite.support.image.ops.ResizeOp;
 import org.tensorflow.lite.support.tensorbuffer.TensorBuffer;
 
+import org.tensorflow.lite.task.vision.segmenter.ColoredLabel;
+import org.tensorflow.lite.task.vision.segmenter.ImageSegmenter;
+import org.tensorflow.lite.task.vision.segmenter.Segmentation;
+
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 
 public class MainActivity extends AppCompatActivity {
 
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
-    private ImageView outputView, inputView, resizedView;
     private PreviewView previewView;
 
     @Override
@@ -52,9 +64,7 @@ public class MainActivity extends AppCompatActivity {
 
         cameraProviderFuture = ProcessCameraProvider.getInstance(this);
         previewView = findViewById(R.id.previewView);
-        outputView = findViewById(R.id.output);
-        inputView = findViewById(R.id.input);
-        resizedView = findViewById(R.id.resized);
+        ImageView outputView = findViewById(R.id.output);
 
         cameraProviderFuture.addListener(() -> {
             try {
@@ -64,89 +74,52 @@ public class MainActivity extends AppCompatActivity {
             }
         }, ContextCompat.getMainExecutor(this));
 
-//        final String ASSOCIATED_AXIS_LABELS = "labels.txt";
-//        List<String> associatedAxisLabels = null;
-//
-//        try {
-//            associatedAxisLabels = FileUtil.loadLabels(this, ASSOCIATED_AXIS_LABELS);
-//        } catch (IOException e) {
-//            Log.e("tfliteSupport", "Error reading label file", e);
-//        }
-
-
         Bitmap bitmap = BitmapFactory.decodeResource(this.getResources(), R.drawable.image);
 
         try {
-            ImageProcessor imageProcessor =
-                    new ImageProcessor.Builder()
-                            .add(new ResizeOp(257, 257, ResizeOp.ResizeMethod.NEAREST_NEIGHBOR))
-                            .build();
+            TensorImage image = TensorImage.fromBitmap(bitmap);
+            ImageSegmenter imageSegmenter = ImageSegmenter.createFromFile(this, "deeplabv3_257_mv_gpu.tflite");
 
-            TensorImage tImage = new TensorImage(DataType.FLOAT32);
-            tImage.load(bitmap);
-            tImage = imageProcessor.process(tImage);
-
-            Deeplab model = Deeplab.newInstance(this);
-            ByteBuffer buffer = ByteBuffer.allocate(bitmap.getByteCount()); // ByteBuffer.allocate(bitmap.getByteCount());
-            bitmap.copyPixelsToBuffer(buffer); //Move the byte data to the buffer
-
-            // Creates inputs for reference.
-            TensorBuffer inputFeature0 = TensorBuffer.createFixedSize(new int[]{1, 257, 257, 3}, DataType.FLOAT32);
-//            inputFeature0.loadArray(flatInput);
-            inputFeature0.loadBuffer(tImage.getBuffer());
-
-            // Runs model inference and gets result.
-            Deeplab.Outputs outputs = model.process(inputFeature0);
-            TensorBuffer outputFeature0 = outputs.getOutputFeature0AsTensorBuffer();
-
-            inputView.setImageBitmap(bitmap);
-            resizedView.setImageBitmap(tImage.getBitmap());
-            outputView.setImageBitmap(convertByteBufferToBitmap(outputFeature0.getBuffer(), 257, 257));
-
-            // Releases model resources if no longer used.
-            model.close();
+            List<Segmentation> results = imageSegmenter.segment(image);
+            Pair<Bitmap, Map<String, Integer>> thing = createMaskBitmapAndLabels(results.get(0), image.getWidth(), image.getHeight());
+            outputView.setImageBitmap(stackBitmaps(thing.first,image.getBitmap()));
         } catch (IOException ignore) {
         }
     }
 
-    @SuppressWarnings("SameParameterValue")
-    private Bitmap convertByteBufferToBitmap(ByteBuffer byteBuffer, int imgSizeX, int imgSizeY) {
-        byteBuffer.rewind();
-        byteBuffer.order(ByteOrder.nativeOrder());
-        Bitmap bitmap = Bitmap.createBitmap(imgSizeX, imgSizeY, Bitmap.Config.ARGB_8888);
-        int[] pixels = new int[imgSizeX * imgSizeY];
-        for (int i = 0; i < imgSizeX * imgSizeY; i++)
-            if (byteBuffer.getFloat() > 0.5)
-                pixels[i] = Color.argb(100, 255, 105, 180);
-            else
-                pixels[i] = Color.argb(0, 0, 0, 0);
+    private Pair<Bitmap, Map<String, Integer>> createMaskBitmapAndLabels(Segmentation result, int inputHeight, int inputWidth) {
+        List<ColoredLabel> coloredLabels = result.getColoredLabels();
+        int[] colors = new int[coloredLabels.size()];
+        int cnt = 0;
 
-        bitmap.setPixels(pixels, 0, imgSizeX, 0, 0, imgSizeX, imgSizeY);
-        return bitmap;
+        for(ColoredLabel coloredLabel : coloredLabels) {
+            int rgb = coloredLabel.getArgb();
+            colors[cnt++] = Color.argb(128, Color.red(rgb), Color.green(rgb), Color.blue(rgb));
+        }
+        colors[0] = Color.TRANSPARENT;
+
+        TensorImage maskTensor = result.getMasks().get(0);
+        byte[] maskArray = maskTensor.getBuffer().array();
+        int[] pixels = new int[maskArray.length];
+        HashMap<String, Integer> itemsFound = new HashMap<>();
+
+        for (int i = 0; i < maskArray.length; i++) {
+            int color = colors[maskArray[i]];
+            pixels[i] = color;
+            itemsFound.put(coloredLabels.get(maskArray[i]).getlabel(), color);
+        }
+
+        Bitmap maskBitmap = Bitmap.createBitmap(pixels, maskTensor.getWidth(), maskTensor.getHeight(), Bitmap.Config.ARGB_8888);
+
+        return Pair.create(Bitmap.createScaledBitmap(maskBitmap, inputWidth, inputHeight, true), itemsFound);
     }
 
-    private Bitmap image() {
-        int w = 257, h = 257;
-        Bitmap.Config conf = Bitmap.Config.ARGB_8888; // see other conf types
-        return Bitmap.createBitmap(w, h, conf); // Temporary Bitmap
-
-//        Button photoButton = (Button) this.findViewById(R.id.button1);
-//        photoButton.setOnClickListener(new View.OnClickListener()
-//        {
-//            @Override
-//            public void onClick(View v)
-//            {
-//                if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
-//                {
-//                    requestPermissions(new String[]{Manifest.permission.CAMERA}, MY_CAMERA_PERMISSION_CODE);
-//                }
-//                else
-//                {
-//                    Intent cameraIntent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
-//                    startActivityForResult(cameraIntent, CAMERA_REQUEST);
-//                }
-//            }
-//        });
+    private Bitmap stackBitmaps(Bitmap foreground, Bitmap background) {
+        Bitmap merged = Bitmap.createBitmap(foreground.getWidth(), foreground.getHeight(), foreground.getConfig());
+        Canvas canvas = new Canvas(merged);
+        canvas.drawBitmap(background, 0.0f, 0.0f, null);
+        canvas.drawBitmap(foreground, 0.0f, 0.0f, null);
+        return merged;
     }
 
     void bindPreview(@NonNull ProcessCameraProvider cameraProvider) {

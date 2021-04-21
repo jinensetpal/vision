@@ -1,7 +1,7 @@
 package com.necter.vision;
 
 import android.Manifest;
-import android.content.Context;
+import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -10,12 +10,8 @@ import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
+import android.media.Image;
 import android.os.Bundle;
-import android.renderscript.Allocation;
-import android.renderscript.Element;
-import android.renderscript.RenderScript;
-import android.renderscript.ScriptIntrinsicYuvToRGB;
-import android.renderscript.Type;
 import android.util.Log;
 import android.util.Size;
 import android.widget.ImageView;
@@ -34,10 +30,6 @@ import androidx.core.util.Pair;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
-import org.opencv.android.Utils;
-import org.opencv.core.CvType;
-import org.opencv.core.Mat;
-import org.opencv.imgproc.Imgproc;
 import org.tensorflow.lite.support.image.TensorImage;
 import org.tensorflow.lite.task.vision.segmenter.ColoredLabel;
 import org.tensorflow.lite.task.vision.segmenter.ImageSegmenter;
@@ -46,6 +38,7 @@ import org.tensorflow.lite.task.vision.segmenter.Segmentation;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ReadOnlyBufferException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,17 +46,12 @@ import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 
-
 public class MainActivity extends AppCompatActivity {
 
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
     private PreviewView previewView;
     private ImageSegmenter imageSegmenter;
     private ImageView outputView;
-
-//    static {
-//        System.loadLibrary("opencv_java3");
-//    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -165,70 +153,91 @@ public class MainActivity extends AppCompatActivity {
         cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis, preview);
     }
 
-//    @Override
-//    public void onPreviewFrame(byte[] data, Camera camera) {
-//        Bitmap bitmap = Bitmap.createBitmap(camera.getParameters().getPreviewSize().width(), r.height(), Bitmap.Config.ARGB_8888);
-//        Allocation bmData = renderScriptNV21ToRGBA8888(
-//                this, r.width(), r.height(), data);
-//        bmData.copyTo(bitmap);
-//    }
-
-    public Allocation renderScriptNV21ToRGBA8888(Context context, int width, int height, byte[] nv21) {
-        RenderScript rs = RenderScript.create(context);
-        ScriptIntrinsicYuvToRGB yuvToRgbIntrinsic = ScriptIntrinsicYuvToRGB.create(rs, Element.U8_4(rs));
-
-        Type.Builder yuvType = new Type.Builder(rs, Element.U8(rs)).setX(nv21.length);
-        Allocation in = Allocation.createTyped(rs, yuvType.create(), Allocation.USAGE_SCRIPT);
-
-        Type.Builder rgbaType = new Type.Builder(rs, Element.RGBA_8888(rs)).setX(width).setY(height);
-        Allocation out = Allocation.createTyped(rs, rgbaType.create(), Allocation.USAGE_SCRIPT);
-
-        in.copyFrom(nv21);
-
-        yuvToRgbIntrinsic.setInput(in);
-        yuvToRgbIntrinsic.forEach(out);
-        return out;
-    }
-
     private Bitmap imageProxyToBitmap(ImageProxy image) {
         Log.d("INFERENCE", String.valueOf(image.getFormat()));
 
-        ImageProxy.PlaneProxy[] planes = image.getPlanes();
-        ByteBuffer yBuffer = planes[0].getBuffer();
-        ByteBuffer uvBuffer = planes[2].getBuffer();
+        @SuppressLint("UnsafeExperimentalUsageError") YuvImage yuvImage = new YuvImage(YUV_420_888toNV21(image.getImage()), ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        yuvImage.compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 100, os);
+        byte[] jpegByteArray = os.toByteArray();
+        return BitmapFactory.decodeByteArray(jpegByteArray, 0, jpegByteArray.length);
+    }
 
-        int ySize = yBuffer.remaining();
-        int uvSize = uvBuffer.remaining();
+    private static byte[] YUV_420_888toNV21(Image image) {
 
-        byte[] nv21 = new byte[ySize + uvSize];
-        yBuffer.get(nv21, 0, ySize);
-        uvBuffer.get(nv21, ySize, uvSize);
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int ySize = width * height;
+        int uvSize = width * height / 4;
 
-        YuvImage yuv = new YuvImage(nv21, ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        yuv.compressToJpeg(new Rect(0, 0, yuv.getWidth(), yuv.getWidth()), 50, out);
-        byte[] imageBytes = out.toByteArray();
-//        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
+        byte[] nv21 = new byte[ySize + uvSize * 2];
 
-        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-        byte[] bytes = new byte[buffer.remaining()];
-        buffer.get(bytes);
+        ByteBuffer yBuffer = image.getPlanes()[0].getBuffer(); // Y
+        ByteBuffer uBuffer = image.getPlanes()[1].getBuffer(); // U
+        ByteBuffer vBuffer = image.getPlanes()[2].getBuffer(); // V
 
-        Bitmap b = Bitmap.createBitmap(image.getHeight(), image.getWidth(), Bitmap.Config.ARGB_8888);
+        int rowStride = image.getPlanes()[0].getRowStride();
+        if (BuildConfig.DEBUG && !(image.getPlanes()[0].getPixelStride() == 1)) {
+            throw new AssertionError("Assertion failed");
+        }
 
-        Mat mat = new Mat(image.getHeight()+image.getHeight()/2, image.getWidth(), CvType.CV_8UC1);
-        mat.put(0, 0, bytes);
-        Mat rgb = new Mat(image.getHeight(), image.getWidth(), CvType.CV_8UC4);
-        Imgproc.cvtColor(mat, rgb, Imgproc.COLOR_YUV420sp2BGR, 4);
-        Utils.matToBitmap(rgb, b);
+        int pos = 0;
 
-        return b;
+        if (rowStride == width) { // likely
+            yBuffer.get(nv21, 0, ySize);
+            pos += ySize;
+        } else {
+            long yBufferPos = -rowStride; // not an actual position
+            for (; pos < ySize; pos += width) {
+                yBufferPos += rowStride;
+                yBuffer.position((int) yBufferPos);
+                yBuffer.get(nv21, pos, width);
+            }
+        }
 
-//        ByteBuffer byteBuffer = image.getPlanes()[0].getBuffer();
-//        byteBuffer.rewind();
-//        byte[] bytes = new byte[byteBuffer.capacity()];
-//        byteBuffer.get(bytes);
-//        byte[] clonedBytes = bytes.clone();
-//        return BitmapFactory.decodeByteArray(clonedBytes, 0, clonedBytes.length);
+        rowStride = image.getPlanes()[2].getRowStride();
+        int pixelStride = image.getPlanes()[2].getPixelStride();
+
+        if (BuildConfig.DEBUG && !(rowStride == image.getPlanes()[1].getRowStride())) {
+            throw new AssertionError("Assertion failed");
+        }
+        if (BuildConfig.DEBUG && !(pixelStride == image.getPlanes()[1].getPixelStride())) {
+            throw new AssertionError("Assertion failed");
+        }
+
+        if (pixelStride == 2 && rowStride == width && uBuffer.get(0) == vBuffer.get(1)) {
+            // maybe V an U planes overlap as per NV21, which means vBuffer[1] is alias of uBuffer[0]
+            byte savePixel = vBuffer.get(1);
+            try {
+                vBuffer.put(1, (byte) ~savePixel);
+                if (uBuffer.get(0) == (byte) ~savePixel) {
+                    vBuffer.put(1, savePixel);
+                    vBuffer.position(0);
+                    uBuffer.position(0);
+                    vBuffer.get(nv21, ySize, 1);
+                    uBuffer.get(nv21, ySize + 1, uBuffer.remaining());
+
+                    return nv21; // shortcut
+                }
+            } catch (ReadOnlyBufferException ex) {
+                // unfortunately, we cannot check if vBuffer and uBuffer overlap
+            }
+
+            // unfortunately, the check failed. We must save U and V pixel by pixel
+            vBuffer.put(1, savePixel);
+        }
+
+        // other optimizations could check if (pixelStride == 1) or (pixelStride == 2),
+        // but performance gain would be less significant
+
+        for (int row = 0; row < height / 2; row++) {
+            for (int col = 0; col < width / 2; col++) {
+                int vuPos = col * pixelStride + row * rowStride;
+                nv21[pos++] = vBuffer.get(vuPos);
+                nv21[pos++] = uBuffer.get(vuPos);
+            }
+        }
+
+        return nv21;
     }
 }

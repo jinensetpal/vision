@@ -12,7 +12,6 @@ import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.media.Image;
 import android.os.Bundle;
-import android.util.Log;
 import android.util.Size;
 import android.widget.ImageView;
 
@@ -120,7 +119,6 @@ public class MainActivity extends AppCompatActivity {
             Pair<Bitmap, Map<String, Integer>> result = createMaskBitmapAndLabels(results.get(0), image.getWidth(), image.getHeight());
             runOnUiThread(() -> outputView.setImageBitmap(stackBitmaps(Objects.requireNonNull(result.first), image.getBitmap())));
         } catch (Exception e) {
-            Log.d("INFERENCE", "shat the bed");
             e.printStackTrace();
         }
     }
@@ -133,7 +131,7 @@ public class MainActivity extends AppCompatActivity {
 
         ImageAnalysis imageAnalysis =
                 new ImageAnalysis.Builder()
-                        .setTargetResolution(new Size(1280, 720))
+                        .setTargetResolution(new Size(257, 257))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build();
 
@@ -145,10 +143,9 @@ public class MainActivity extends AppCompatActivity {
         cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis);
     }
 
+    @SuppressLint("UnsafeExperimentalUsageError")
     private Bitmap imageProxyToBitmap(ImageProxy image) {
-        Log.d("INFERENCE", String.valueOf(image.getFormat()));
-
-        @SuppressLint("UnsafeExperimentalUsageError") YuvImage yuvImage = new YuvImage(YUV_420_888toNV21(image.getImage()), ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
+        YuvImage yuvImage = new YuvImage(YUV_420_888toNV21(Objects.requireNonNull(image.getImage())), ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
         ByteArrayOutputStream os = new ByteArrayOutputStream();
         yuvImage.compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 100, os);
         byte[] jpegByteArray = os.toByteArray();

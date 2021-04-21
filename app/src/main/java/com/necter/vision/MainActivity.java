@@ -21,9 +21,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
-import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.util.Pair;
@@ -49,7 +47,6 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
 
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
-    private PreviewView previewView;
     private ImageSegmenter imageSegmenter;
     private ImageView outputView;
 
@@ -65,7 +62,6 @@ public class MainActivity extends AppCompatActivity {
         }
 
         cameraProviderFuture = ProcessCameraProvider.getInstance(this);
-        previewView = findViewById(R.id.previewView);
         outputView = findViewById(R.id.output);
 
         try {
@@ -130,14 +126,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     void getInference(@NonNull ProcessCameraProvider cameraProvider) {
-        Preview preview = new Preview.Builder()
-                .build();
 
         CameraSelector cameraSelector = new CameraSelector.Builder()
                 .requireLensFacing(CameraSelector.LENS_FACING_BACK)
                 .build();
-
-        preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
         ImageAnalysis imageAnalysis =
                 new ImageAnalysis.Builder()
@@ -150,7 +142,7 @@ public class MainActivity extends AppCompatActivity {
             image.close();
         });
 
-        cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis, preview);
+        cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis);
     }
 
     private Bitmap imageProxyToBitmap(ImageProxy image) {
@@ -164,7 +156,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private static byte[] YUV_420_888toNV21(Image image) {
-
         int width = image.getWidth();
         int height = image.getHeight();
         int ySize = width * height;
@@ -206,7 +197,6 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (pixelStride == 2 && rowStride == width && uBuffer.get(0) == vBuffer.get(1)) {
-            // maybe V an U planes overlap as per NV21, which means vBuffer[1] is alias of uBuffer[0]
             byte savePixel = vBuffer.get(1);
             try {
                 vBuffer.put(1, (byte) ~savePixel);
@@ -219,16 +209,10 @@ public class MainActivity extends AppCompatActivity {
 
                     return nv21; // shortcut
                 }
-            } catch (ReadOnlyBufferException ex) {
-                // unfortunately, we cannot check if vBuffer and uBuffer overlap
+            } catch (ReadOnlyBufferException ignore) {
             }
-
-            // unfortunately, the check failed. We must save U and V pixel by pixel
             vBuffer.put(1, savePixel);
         }
-
-        // other optimizations could check if (pixelStride == 1) or (pixelStride == 2),
-        // but performance gain would be less significant
 
         for (int row = 0; row < height / 2; row++) {
             for (int col = 0; col < width / 2; col++) {

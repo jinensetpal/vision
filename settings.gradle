@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
@@ -9,3 +10,7 @@ dependencyResolutionManagement {
 rootProject.name = "ML_Vision"
 include ':app'
 include ':mlVisionLibrary'
+=======
+include ':app'
+rootProject.name = "vision"
+>>>>>>> 82f7e32c778737282b391a8f780bde856f133de8

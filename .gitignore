@@ -13,3 +13,10 @@
 .externalNativeBuild
 .cxx
 local.properties
+<<<<<<< HEAD
+=======
+
+app/release
+
+*.jpg
+>>>>>>> 82f7e32c778737282b391a8f780bde856f133de8

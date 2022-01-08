@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+<<<<<<< HEAD
     package="com.example.ml_vision">
+=======
+    package="com.necter.vision">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" />
+>>>>>>> 82f7e32c778737282b391a8f780bde856f133de8
 
     <application
         android:allowBackup="true"
@@ -8,10 +15,15 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+<<<<<<< HEAD
         android:theme="@style/Theme.ML_Vision">
         <activity
             android:name=".MainActivity"
             android:exported="true">
+=======
+        android:theme="@style/Theme.Vision">
+        <activity android:name=".MainActivity">
+>>>>>>> 82f7e32c778737282b391a8f780bde856f133de8
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

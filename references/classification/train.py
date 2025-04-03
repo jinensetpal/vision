@@ -16,7 +16,15 @@ from torchvision.transforms.functional import InterpolationMode
 from transforms import get_mixup_cutmix
 
 
-def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
+from src.model.arch import Model
+from src import const
+
+const.N_CLASSES = 1000
+const.DATASET = 'imagenet'
+const.PRETRAINED = False
+
+
+def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, benchmark_batch=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
@@ -44,6 +52,7 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
             if args.clip_grad_norm is not None:
                 nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
+            if benchmark_batch is not None: model.module.overwrite_tracked_statistics(((benchmark_batch, None),))
 
         if model_ema and i % args.model_ema_steps == 0:
             model_ema.update_parameters(model)
@@ -245,8 +254,12 @@ def main(args):
     )
 
     print("Creating model")
-    model = torchvision.models.get_model(args.model, weights=args.weights, num_classes=num_classes)
+    #model = torchvision.models.get_model(args.model, weights=args.weights, num_classes=num_classes)
+    model = Model(is_contrastive=True, multilabel=False, xl_backbone=False, upsampling_level=1, hardinet_eval=True,
+            logits_only=True, disable_bn=False, modified_bn='Causal', backbone_acts='ELU', device=device)
     model.to(device)
+    print(model)
+    model = torch.compile(model)
 
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -360,12 +373,16 @@ def main(args):
             evaluate(model, criterion, data_loader_test, device=device)
         return
 
+    torch.manual_seed(1024)
+    benchmark_batch = next(iter(torch.utils.data.DataLoader(data_loader.dataset, batch_size=384, shuffle=True)))[0] if model.module.backbone.bn1._get_name() == 'ModifiedBN2d' else None
+    model.module.overwrite_tracked_statistics(((benchmark_batch, None),))
+
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
+        train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, benchmark_batch=benchmark_batch)
         lr_scheduler.step()
         evaluate(model, criterion, data_loader_test, device=device)
         if model_ema:
